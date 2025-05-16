@@ -1,0 +1,245 @@
+import json
+import argparse
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# === QLOG Parsing Functions ===
+
+def parse_metrics_qlog(path):
+    """
+    Parse recovery:metrics_updated events for time, path_id, bytes_in_flight,
+    congestion_window, latest_rtt, rtt_variance, pacing_rate.
+    """
+    records = []
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line.startswith('{'):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get('name') == 'recovery:metrics_updated':
+                data = event.get('data', {})
+                t = event.get('time')
+                if t is None:
+                    continue
+                rec = {'time': t}
+                for field in ['path_id', 'bytes_in_flight', 'congestion_window',
+                              'latest_rtt', 'rtt_variance', 'pacing_rate']:
+                    if field in data:
+                        rec[field] = data.get(field)
+                records.append(rec)
+    df = pd.DataFrame(records)
+    return df
+
+
+def parse_packet_sent(path):
+    """
+    Parse transport:packet_sent events for time and payload_length, plus pacing intervals.
+    """
+    records = []
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line.startswith('{'):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get('name') == 'transport:packet_sent':
+                t = event.get('time')
+                if t is None:
+                    continue
+                raw = event.get('data', {}).get('raw', {})
+                pl = raw.get('payload_length', 0)
+                records.append({'time': t, 'payload_length': pl})
+    df = pd.DataFrame(records)
+    if not df.empty:
+        df = df.sort_values('time').reset_index(drop=True)
+        df['interval'] = df['time'].diff()
+    return df
+
+
+def parse_ack_received(path):
+    """
+    Parse transport:packet_received events for ACK arrival times and ack_delays.
+    """
+    records = []
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line.startswith('{'):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get('name') == 'transport:packet_received':
+                t = event.get('time')
+                if t is None:
+                    continue
+                frames = event.get('data', {}).get('frames', [])
+                # find first ACK frame
+                for fr in frames:
+                    ft = fr.get('frame_type', '').lower()
+                    if 'ack' in ft:
+                        ack_delay = fr.get('ack_delay')
+                        records.append({'time': t, 'ack_delay': ack_delay})
+                        break
+    df = pd.DataFrame(records)
+    return df
+
+
+def parse_window_bumps(path):
+    """
+    Parse events for MAX_STREAM_DATA frames (flow-control window bumps).
+    """
+    records = []
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line.startswith('{'):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            name = event.get('name')
+            if name in ('transport:frame_sent', 'transport:packet_received'):
+                t = event.get('time')
+                if t is None:
+                    continue
+                frames = event.get('data', {}).get('frames', [])
+                for fr in frames:
+                    if fr.get('frame_type') == 'max_stream_data':
+                        stream_id = fr.get('stream_id')
+                        # support both 'maximum_data' and 'maximum'
+                        max_data = fr.get('maximum_data', fr.get('maximum'))
+                        records.append({'time': t, 'stream_id': stream_id,
+                                        'max_stream_data': max_data})
+    df = pd.DataFrame(records)
+    return df
+
+
+def align_times(dfs, zero_time):
+    """
+    Shift each DataFrame's 'time' to milliseconds relative to zero_time.
+    """
+    results = []
+    for df in dfs:
+        d = df.copy()
+        if 'time' in d.columns:
+            d['time_ms'] = (d['time'] - zero_time)
+            d.sort_values('time_ms', inplace=True)
+        else:
+            d['time_ms'] = pd.Series([], dtype=float)
+        results.append(d.reset_index(drop=True))
+    return results
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Side-by-side QLOG comparison')
+    parser.add_argument('--qlog1', required=True, help='Original server qlog file')
+    parser.add_argument('--label1', default='original', help='Label for original run')
+    parser.add_argument('--qlog2', required=True, help='MP-QUIC server qlog file')
+    parser.add_argument('--label2', default='mp-quic', help='Label for modified run')
+    args = parser.parse_args()
+
+    # Parse logs
+    m1 = parse_metrics_qlog(args.qlog1)
+    m2 = parse_metrics_qlog(args.qlog2)
+    ps1 = parse_packet_sent(args.qlog1)
+    ps2 = parse_packet_sent(args.qlog2)
+    ar1 = parse_ack_received(args.qlog1)
+    ar2 = parse_ack_received(args.qlog2)
+    wb1 = parse_window_bumps(args.qlog1)
+    wb2 = parse_window_bumps(args.qlog2)
+
+    # Determine zero time as earliest first packet_sent across both logs
+    zero_times = []
+    if not ps1.empty:
+        zero_times.append(ps1['time'].iloc[0])
+    if not ps2.empty:
+        zero_times.append(ps2['time'].iloc[0])
+    if not zero_times:
+        raise RuntimeError('No packet_sent events found to align timelines.')
+    zero = min(zero_times)
+
+    # Align times
+    m1, m2 = align_times([m1, m2], zero)
+    ps1, ps2 = align_times([ps1, ps2], zero)
+    ar1, ar2 = align_times([ar1, ar2], zero)
+    wb1, wb2 = align_times([wb1, wb2], zero)
+
+    # --- Compute Utilization Metrics ---
+    for df_metrics, df_send, lbl in [(m1, ps1, args.label1), (m2, ps2, args.label2)]:
+        # CWND-area
+        if 'congestion_window' in df_metrics.columns and not df_metrics.empty:
+            tw = df_metrics[~df_metrics['congestion_window'].isna()].copy()
+            times = tw['time_ms'].values
+            cwnds = tw['congestion_window'].values
+            if len(times) > 1:
+                deltas = (times[1:] - times[:-1]) / 1000.0
+                cwnd_area = np.sum(cwnds[:-1] * deltas)
+            else:
+                cwnd_area = 0.0
+        else:
+            cwnd_area = float('nan')
+        # Total bytes sent
+        total_bytes = df_send['payload_length'].sum() if 'payload_length' in df_send.columns else float('nan')
+        # Utilization ratio
+        U = total_bytes / cwnd_area if cwnd_area > 0 else float('nan')
+        print(f"{lbl}: CWND-area = {cwnd_area:.2f} byte-seconds,"
+              f" total bytes = {total_bytes}, U = {U:.4f}")
+
+    # Plot Bytes-in-flight vs Congestion Window
+    plt.figure(figsize=(10, 6))
+    for df, lbl in [(m1, args.label1), (m2, args.label2)]:
+        if 'bytes_in_flight' in df.columns and 'congestion_window' in df.columns:
+            plt.plot(df['time_ms'], df['bytes_in_flight'], label=f'{lbl} bytes_in_flight')
+            plt.plot(df['time_ms'], df['congestion_window'], linestyle='--', label=f'{lbl} cwnd')
+    plt.title('Bytes In Flight vs Congestion Window')
+    plt.xlabel('Time (ms)')
+    plt.ylabel('Bytes')
+    plt.legend()
+    plt.grid(True)
+
+    # Plot send pacing intervals
+    plt.figure(figsize=(10, 4))
+    plt.plot(ps1['time_ms'], ps1['interval'], marker='.', linestyle='-', label=args.label1)
+    plt.plot(ps2['time_ms'], ps2['interval'], marker='.', linestyle='-', label=args.label2)
+    plt.title('Send Pacing Intervals')
+    plt.xlabel('Time (ms)')
+    plt.ylabel('Interval (s)')
+    plt.legend()
+    plt.grid(True)
+
+    # Plot ACK arrival times and delays
+    plt.figure(figsize=(10, 4))
+    if not ar1.empty:
+        plt.scatter(ar1['time_ms'], ar1['ack_delay'], marker='o', label=args.label1)
+    if not ar2.empty:
+        plt.scatter(ar2['time_ms'], ar2['ack_delay'], marker='x', label=args.label2)
+    plt.title('ACK Arrival Times and Delays')
+    plt.xlabel('Time (ms)')
+    plt.ylabel('Ack Delay (s)')
+    plt.legend()
+    plt.grid(True)
+
+    # Plot flow-control window bumps
+    plt.figure(figsize=(10, 4))
+    if not wb1.empty:
+        plt.step(wb1['time_ms'], wb1['max_stream_data'], where='post', label=args.label1)
+    if not wb2.empty:
+        plt.step(wb2['time_ms'], wb2['max_stream_data'], where='post', label=args.label2)
+    plt.title('Flow-control Window Bumps (MAX_STREAM_DATA)')
+    plt.xlabel('Time (ms)')
+    plt.ylabel('Max Stream Data')
+    plt.legend()
+    plt.grid(True)
+
+    plt.show()
