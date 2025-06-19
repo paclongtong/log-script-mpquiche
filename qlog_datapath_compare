@@ -1,0 +1,259 @@
+import json
+import argparse
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# === QLOG Parsing Functions ===
+
+def parse_metrics_qlog_path0_only(path):
+    """
+    Parse recovery:metrics_updated events for path_id=0 only, extracting
+    time, bytes_in_flight, congestion_window, latest_rtt, rtt_variance, pacing_rate.
+    """
+    records = []
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line.startswith('{'):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get('name') == 'recovery:metrics_updated':
+                data = event.get('data', {})
+                t = event.get('time')
+                if t is None:
+                    continue
+                
+                # Only process path_id = 0 (or missing path_id, assuming it's path 0)
+                path_id = data.get('path_id', 0)
+                if path_id != 0:
+                    continue
+                
+                rec = {'time': t, 'path_id': path_id}
+                for field in ['bytes_in_flight', 'congestion_window',
+                              'latest_rtt', 'rtt_variance', 'pacing_rate']:
+                    if field in data:
+                        rec[field] = data.get(field)
+                records.append(rec)
+    df = pd.DataFrame(records)
+    return df
+
+
+def parse_packet_sent_path0_only(path):
+    """
+    Parse transport:packet_sent events for path0 only, extracting time and payload_length.
+    """
+    records = []
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line.startswith('{'):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get('name') == 'transport:packet_sent':
+                t = event.get('time')
+                if t is None:
+                    continue
+                
+                # Check if this is path 0 (look for path_id in data or assume path 0)
+                data = event.get('data', {})
+                path_id = data.get('path_id', 0)
+                if path_id != 0:
+                    continue
+                
+                raw = data.get('raw', {})
+                pl = raw.get('payload_length', 0)
+                records.append({'time': t, 'payload_length': pl, 'path_id': path_id})
+    df = pd.DataFrame(records)
+    if not df.empty:
+        df = df.sort_values('time').reset_index(drop=True)
+        df['interval'] = df['time'].diff()
+    return df
+
+
+def align_times(dfs, zero_time):
+    """
+    Shift each DataFrame's 'time' to milliseconds relative to zero_time.
+    """
+    results = []
+    for df in dfs:
+        d = df.copy()
+        if 'time' in d.columns and not d.empty:
+            d['time_ms'] = (d['time'] - zero_time)
+            d.sort_values('time_ms', inplace=True)
+        else:
+            d['time_ms'] = pd.Series([], dtype=float)
+        results.append(d.reset_index(drop=True))
+    return results
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Compare Path0 CWND between different QUIC implementations')
+    parser.add_argument('--qlog1', required=True, help='First implementation qlog file')
+    parser.add_argument('--label1', default='Implementation 1', help='Label for first implementation')
+    parser.add_argument('--qlog2', required=True, help='Second implementation qlog file')
+    parser.add_argument('--label2', default='Implementation 2', help='Label for second implementation')
+    parser.add_argument('--output', help='Save plot to file instead of showing')
+    args = parser.parse_args()
+
+    print(f"Parsing {args.label1} qlog: {args.qlog1}")
+    print(f"Parsing {args.label2} qlog: {args.qlog2}")
+
+    # Parse logs for path0 only
+    m1 = parse_metrics_qlog_path0_only(args.qlog1)
+    m2 = parse_metrics_qlog_path0_only(args.qlog2)
+    ps1 = parse_packet_sent_path0_only(args.qlog1)
+    ps2 = parse_packet_sent_path0_only(args.qlog2)
+
+    print(f"{args.label1} - Found {len(m1)} metrics events and {len(ps1)} packet_sent events for path0")
+    print(f"{args.label2} - Found {len(m2)} metrics events and {len(ps2)} packet_sent events for path0")
+
+    # Determine zero time as earliest first packet_sent across both logs
+    zero_times = []
+    if not ps1.empty:
+        zero_times.append(ps1['time'].iloc[0])
+    if not ps2.empty:
+        zero_times.append(ps2['time'].iloc[0])
+    if not zero_times:
+        # Fallback to metrics events if no packet_sent found
+        if not m1.empty:
+            zero_times.append(m1['time'].iloc[0])
+        if not m2.empty:
+            zero_times.append(m2['time'].iloc[0])
+    
+    if not zero_times:
+        raise RuntimeError('No events found to align timelines.')
+    
+    zero = min(zero_times)
+    print(f"Using zero time: {zero}")
+
+    # Align times
+    m1, m2 = align_times([m1, m2], zero)
+    ps1, ps2 = align_times([ps1, ps2], zero)
+
+    # --- Compute Path0 CWND Utilization Metrics ---
+    print("\n=== Path0 CWND Utilization Analysis ===")
+    for df_metrics, df_send, lbl in [(m1, ps1, args.label1), (m2, ps2, args.label2)]:
+        # CWND-area for path0
+        if 'congestion_window' in df_metrics.columns and not df_metrics.empty:
+            tw = df_metrics[~df_metrics['congestion_window'].isna()].copy()
+            if not tw.empty:
+                times = tw['time_ms'].values
+                cwnds = tw['congestion_window'].values
+                if len(times) > 1:
+                    deltas = (times[1:] - times[:-1]) / 1000.0  # Convert to seconds
+                    cwnd_area = np.sum(cwnds[:-1] * deltas)
+                    max_cwnd = np.max(cwnds)
+                    min_cwnd = np.min(cwnds)
+                    avg_cwnd = np.mean(cwnds)
+                else:
+                    cwnd_area = 0.0
+                    max_cwnd = cwnds[0] if len(cwnds) > 0 else 0
+                    min_cwnd = max_cwnd
+                    avg_cwnd = max_cwnd
+            else:
+                cwnd_area = 0.0
+                max_cwnd = min_cwnd = avg_cwnd = 0
+        else:
+            cwnd_area = max_cwnd = min_cwnd = avg_cwnd = float('nan')
+        
+        # Total bytes sent on path0
+        total_bytes = df_send['payload_length'].sum() if 'payload_length' in df_send.columns else 0
+        
+        # Utilization ratio
+        U = total_bytes / cwnd_area if cwnd_area > 0 else float('nan')
+        
+        print(f"{lbl} Path0:")
+        print(f"  CWND-area = {cwnd_area:.2f} byte-seconds")
+        print(f"  Total bytes sent = {total_bytes}")
+        print(f"  Utilization ratio = {U:.4f}")
+        print(f"  CWND stats: min={min_cwnd:.0f}, avg={avg_cwnd:.0f}, max={max_cwnd:.0f}")
+        print()
+
+    # Create comprehensive plots
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    fig.suptitle('Path0 CWND Comparison Between Implementations', fontsize=16)
+
+    # Plot 1: Congestion Window Over Time
+    ax1 = axes[0, 0]
+    if 'congestion_window' in m1.columns and not m1.empty:
+        ax1.plot(m1['time_ms'], m1['congestion_window'], 
+                label=f'{args.label1} CWND', linewidth=2, alpha=0.8)
+    if 'congestion_window' in m2.columns and not m2.empty:
+        ax1.plot(m2['time_ms'], m2['congestion_window'], 
+                label=f'{args.label2} CWND', linewidth=2, alpha=0.8)
+    ax1.set_title('Path0 Congestion Window Over Time')
+    ax1.set_xlabel('Time (ms)')
+    ax1.set_ylabel('CWND (bytes)')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Plot 2: Bytes in Flight vs CWND
+    ax2 = axes[0, 1]
+    for df, lbl in [(m1, args.label1), (m2, args.label2)]:
+        if 'bytes_in_flight' in df.columns and 'congestion_window' in df.columns and not df.empty:
+            ax2.plot(df['time_ms'], df['bytes_in_flight'], 
+                    label=f'{lbl} bytes_in_flight', alpha=0.7)
+            ax2.plot(df['time_ms'], df['congestion_window'], 
+                    linestyle='--', label=f'{lbl} CWND', alpha=0.7)
+    ax2.set_title('Path0 Bytes In Flight vs CWND')
+    ax2.set_xlabel('Time (ms)')
+    ax2.set_ylabel('Bytes')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    # Plot 3: RTT Comparison
+    ax3 = axes[1, 0]
+    if 'latest_rtt' in m1.columns and not m1.empty:
+        # Convert RTT to milliseconds if it's in microseconds
+        rtt1 = m1['latest_rtt']
+        if not rtt1.empty and rtt1.max() > 1000:  # Likely in microseconds
+            rtt1 = rtt1 / 1000
+        ax3.plot(m1['time_ms'], rtt1, label=f'{args.label1} RTT', alpha=0.8)
+    if 'latest_rtt' in m2.columns and not m2.empty:
+        rtt2 = m2['latest_rtt']
+        if not rtt2.empty and rtt2.max() > 1000:  # Likely in microseconds
+            rtt2 = rtt2 / 1000
+        ax3.plot(m2['time_ms'], rtt2, label=f'{args.label2} RTT', alpha=0.8)
+    ax3.set_title('Path0 Round-Trip Time')
+    ax3.set_xlabel('Time (ms)')
+    ax3.set_ylabel('RTT (ms)')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+
+    # Plot 4: Send Rate (packets per second)
+    ax4 = axes[1, 1]
+    for df_send, lbl in [(ps1, args.label1), (ps2, args.label2)]:
+        if not df_send.empty and 'time_ms' in df_send.columns:
+            # Calculate send rate in 100ms windows
+            time_bins = np.arange(0, df_send['time_ms'].max() + 100, 100)
+            send_rates = []
+            bin_centers = []
+            for i in range(len(time_bins) - 1):
+                mask = (df_send['time_ms'] >= time_bins[i]) & (df_send['time_ms'] < time_bins[i+1])
+                packets_in_bin = mask.sum()
+                send_rate = packets_in_bin * 10  # packets per second (100ms bins * 10)
+                send_rates.append(send_rate)
+                bin_centers.append((time_bins[i] + time_bins[i+1]) / 2)
+            
+            ax4.plot(bin_centers, send_rates, label=f'{lbl} send rate', alpha=0.8)
+    
+    ax4.set_title('Path0 Send Rate (packets/sec)')
+    ax4.set_xlabel('Time (ms)')
+    ax4.set_ylabel('Packets/sec')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    
+    if args.output:
+        plt.savefig(args.output, dpi=300, bbox_inches='tight')
+        print(f"Plot saved to {args.output}")
+    else:
+        plt.show()

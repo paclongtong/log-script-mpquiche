@@ -1,76 +1,3 @@
-# /home/paul/data_quiche/qlog/ori/server-b8191a9c9180012653dd6fb1a00a5c7c3f90cd54.sqlog
-# /home/paul/data_quiche/qlog/dev/server-348198ca5e4e900a6732e14cc9cea57b2bee5f76.sqlog
-
-'''
-import json
-import pandas as pd
-import matplotlib.pyplot as plt
-
-# === Hardcoded default files and labels ===
-# QLOG_FILE_1 = "/home/paul/data_quiche/qlog/ori/server-7955d219ce9edaae849637938611addc7984ebef.sqlog"
-QLOG_FILE_1 = "/home/paul/data_quiche/qlog/ori/client-af6c969abb712c0244939e8d3075363ecc9418bb.sqlog"
-
-LABEL_1 = "original"
-# QLOG_FILE_2 = "/home/paul/data_quiche/qlog/dev/server-310b25b6a1d5522b643dfcd7c864d7e377ca5f3d.sqlog"
-QLOG_FILE_2 = "/home/paul/data_quiche/qlog/dev/client-b6c980769c4b7147c4db43b85efbeac6212029a0.sqlog"
-LABEL_2 = "separate"
-
-def parse_qlog(path):
-    """Parse a QLOG file and extract time, cwnd, bytes_in_flight, and rtt_variance."""
-    records = []
-    with open(path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line.startswith('{'):
-                continue
-            event = json.loads(line)
-            if event.get("name") == "recovery:metrics_updated":
-                data = event.get("data", {})
-                time = event.get("time")
-                cwnd = data.get("congestion_window")
-                bif = data.get("bytes_in_flight")
-                rttvar = data.get("rtt_variance")
-                latest_rtt = data.get("latest_rtt")
-                if time is not None and cwnd is not None and bif is not None and latest_rtt is not None:
-                    records.append({
-                        "time_s": time,
-                        "cwnd": cwnd,
-                        "bytes_in_flight": bif,
-                        "latest_rtt": latest_rtt
-                    })
-    df = pd.DataFrame(records)
-    df["headroom_ratio"] = (df["cwnd"] - df["bytes_in_flight"]) / df["cwnd"]
-    return df
-
-def plot_trends(qlog1, label1, qlog2, label2):
-    df1 = parse_qlog(qlog1)
-    df2 = parse_qlog(qlog2)
-
-    # Plot headroom_ratio
-    plt.figure()
-    plt.plot(df1["time_s"], df1["headroom_ratio"], label=label1)
-    plt.plot(df2["time_s"], df2["headroom_ratio"], label=label2)
-    plt.title("Headroom Ratio Over Time")
-    plt.xlabel("Time (s)")
-    plt.ylabel("Headroom Ratio")
-    plt.legend()
-
-    # Plot RTT variance
-    plt.figure()
-    plt.plot(df1["time_s"], df1["latest_rtt"], label=label1)
-    plt.plot(df2["time_s"], df2["latest_rtt"], label=label2)
-    plt.title("Latest RTT Over Time")
-    plt.xlabel("Time (s)")
-    plt.ylabel("Latest RTT (ms)")
-    plt.legend()
-
-    plt.show()
-
-if __name__ == "__main__":
-    plot_trends(QLOG_FILE_1, LABEL_1, QLOG_FILE_2, LABEL_2)
-'''
-
-
 import json
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -88,17 +15,9 @@ CALC_PAYLOAD_STATS = False
 PLOT_PACING_RATE = True
 
 # Default files and labels
-# QLOG_FILE_1 = "/home/paul/data_quiche/qlog/ori/client-af6c969abb712c0244939e8d3075363ecc9418bb.sqlog"
-# QLOG_FILE_1 = "/home/paul/data_quiche/qlog/server_fixed/client-ad6e602ee063290ca65374a3b958899ed1706754.sqlog"
-# QLOG_FILE_1 = "/home/paul/data_quiche/qlog/original_pathfixed_100MB_bw100-5_dl200-5/client-3a45299803d32c76c36748f9f1742b652aa03da2.sqlog"
-QLOG_FILE_1 = "/tmp/minitopo_experiences/client-386bc8df46feb429535470f229b6c20a91a0cf5c.sqlog"
-# QLOG_FILE_1 = "/home/paul/data_quiche/qlog/original_pathfixed_100MB_bw100-5_dl200-5/client-0b935f79ce8418862e41f05c79dcbaa6f1d3f203.sqlog"
+QLOG_FILE_1 = "/tmp/minitopo_experiences/client-f8df99ac4cd66fe119beba9cab9c4acd3528d6b4.sqlog"
 LABEL_1 = "client"
-# QLOG_FILE_2 = "/home/paul/data_quiche/qlog/dev/client-b6c980769c4b7147c4db43b85efbeac6212029a0.sqlog"
-# QLOG_FILE_2 = "/home/paul/data_quiche/qlog/server_fixed/server-4520145433d41f900d3b8d4be0235b413ace4031.sqlog"
-# QLOG_FILE_2 = "/home/paul/data_quiche/qlog/original_pathfixed_100MB_bw100-5_dl200-5/server-1493c9f706e0c8e40c22d876b8a87a86af4d2adb.sqlog"
-QLOG_FILE_2 = "/tmp/minitopo_experiences/server-32d3cdaa48e3c30f7771adbe9c7180b229855430.sqlog"
-# QLOG_FILE_2 = "/home/paul/data_quiche/qlog/original_pathfixed_100MB_bw100-5_dl200-5/server-3d49528e79d439eaab7832e275d3c13cf1ec6455.sqlog"
+QLOG_FILE_2 = "/tmp/minitopo_experiences/server-790c82828ec2619ce06462bdfc6ad8a288455601.sqlog"
 LABEL_2 = "server"
 
 user_defined_label = "original"
@@ -128,9 +47,13 @@ def parse_qlog(path):
                 bif = data.get("bytes_in_flight")
                 cwnd = data.get("congestion_window")
                 pacing = data.get("pacing_rate") 
-                if time is None or path_id is None or latest_rtt is None or bif is None or cwnd is None:
+                
+                # Only require time, path_id, latest_rtt, and bytes_in_flight as mandatory
+                # cwnd and other fields are optional
+                if time is None or path_id is None or latest_rtt is None or bif is None:
                     # skip records missing mandatory fields
                     continue
+                    
                 record = {
                     "time_s": time,
                     "path_id": path_id,
@@ -145,9 +68,10 @@ def parse_qlog(path):
                     record["pacing_rate"] = pacing
                 records.append(record)
     df = pd.DataFrame(records)
-    # compute headroom ratio when possible
-    if "cwnd" in df.columns:
-        df["headroom_ratio"] = (df["cwnd"] - df["bytes_in_flight"]) / df["cwnd"]
+    # compute headroom ratio when possible (only for records that have cwnd)
+    if "cwnd" in df.columns and not df["cwnd"].isna().all():
+        # Only compute headroom for rows where cwnd is not null
+        df["headroom_ratio"] = ((df["cwnd"] - df["bytes_in_flight"]) / df["cwnd"]).where(df["cwnd"].notna())
     return df
 
 def parse_payload_qlog(path):
@@ -197,11 +121,19 @@ def plot_trends(qlog1, label1, qlog2, label2):
     df1 = parse_qlog(qlog1)
     df2 = parse_qlog(qlog2)
 
+    print(f"Data range for {label1}: {df1['time_s'].min():.2f}s to {df1['time_s'].max():.2f}s ({len(df1)} records)")
+    print(f"Data range for {label2}: {df2['time_s'].min():.2f}s to {df2['time_s'].max():.2f}s ({len(df2)} records)")
+
     # 1) Headroom Ratio
-    if PLOT_HEADROOM:
+    if PLOT_HEADROOM and "headroom_ratio" in df1.columns and "headroom_ratio" in df2.columns:
         plt.figure()
-        plt.plot(df1["time_s"], df1["headroom_ratio"], label=label1)
-        plt.plot(df2["time_s"], df2["headroom_ratio"], label=label2)
+        # Only plot non-null headroom ratios
+        df1_valid = df1.dropna(subset=['headroom_ratio'])
+        df2_valid = df2.dropna(subset=['headroom_ratio'])
+        if not df1_valid.empty:
+            plt.plot(df1_valid["time_s"], df1_valid["headroom_ratio"], label=label1)
+        if not df2_valid.empty:
+            plt.plot(df2_valid["time_s"], df2_valid["headroom_ratio"], label=label2)
         plt.title("Headroom Ratio Over Time")
         plt.xlabel("Time (s)")
         plt.ylabel("Headroom Ratio")
@@ -230,14 +162,18 @@ def plot_trends(qlog1, label1, qlog2, label2):
     # 3) RTT Variance
     if PLOT_RTT_VARIANCE:
         plt.figure()
-        plt.plot(df1["time_s"], df1["rtt_variance"], label=label1)
-        plt.plot(df2["time_s"], df2["rtt_variance"], label=label2)
+        # Filter out null values for RTT variance
+        df1_rttvar = df1.dropna(subset=['rtt_variance'])
+        df2_rttvar = df2.dropna(subset=['rtt_variance'])
+        if not df1_rttvar.empty:
+            plt.plot(df1_rttvar["time_s"], df1_rttvar["rtt_variance"], label=label1)
+        if not df2_rttvar.empty:
+            plt.plot(df2_rttvar["time_s"], df2_rttvar["rtt_variance"], label=label2)
         plt.title("RTT Variance Over Time")
         plt.xlabel("Time (s)")
         plt.ylabel("RTT Variance (ms^2)")
         plt.legend()
 
-        # 4) Bytes In Flight
     # 4) Bytes In Flight
     if PLOT_BYTES_IN_FLIGHT:
         plt.figure()
@@ -259,18 +195,29 @@ def plot_trends(qlog1, label1, qlog2, label2):
     # 5) Congestion Window
     if PLOT_CWND:
         plt.figure()
+        # Only plot paths that have cwnd data
+        cwnd_plotted = False
         for pid in sorted(df1["path_id"].unique()):
             d = df1[df1["path_id"] == pid]
-            plt.plot(d["time_s"], d["cwnd"], label=f"{label1}-path{pid}")
+            d_cwnd = d.dropna(subset=['cwnd'])
+            if not d_cwnd.empty:
+                plt.plot(d_cwnd["time_s"], d_cwnd["cwnd"], label=f"{label1}-path{pid}")
+                cwnd_plotted = True
         for pid in sorted(df2["path_id"].unique()):
             d = df2[df2["path_id"] == pid]
-            plt.plot(d["time_s"], d["cwnd"], label=f"{label2}-path{pid}")
-        plt.title("Congestion Window Over Time")
-        plt.xlabel("Time (s)")
-        plt.ylabel("Congestion Window (bytes)")
-        plt.legend()
-    elif PLOT_CWND:
-        print("Warning: 'cwnd' column not found; skipping CWND plot.")
+            d_cwnd = d.dropna(subset=['cwnd'])
+            if not d_cwnd.empty:
+                plt.plot(d_cwnd["time_s"], d_cwnd["cwnd"], label=f"{label2}-path{pid}")
+                cwnd_plotted = True
+        
+        if cwnd_plotted:
+            plt.title("Congestion Window Over Time")
+            plt.xlabel("Time (s)")
+            plt.ylabel("Congestion Window (bytes)")
+            plt.legend()
+        else:
+            plt.close()  # Close the empty figure
+            print("Warning: No congestion window data found; skipping CWND plot.")
     
     # 6) Payload Length
     if PLOT_PAYLOAD_LENGTH:
@@ -290,24 +237,41 @@ def plot_trends(qlog1, label1, qlog2, label2):
             print("Warning: No payload_length data found; skipping payload plot.")
 
     # 7) Pacing Rate
-    if PLOT_PACING_RATE and "pacing_rate" in df2.columns:
+    if PLOT_PACING_RATE:
         plt.figure()
-        # for pid in sorted(df1["path_id"].unique()):
-        #     d = df1[df1["path_id"] == pid]
-        #     plt.plot(d["time_s"], d["pacing_rate"], label=f"{label1}-path{pid}")
-        for pid in sorted(df2["path_id"].unique()):
-            d = df2[df2["path_id"] == pid]
-            plt.plot(d["time_s"], d["pacing_rate"], label=f"{label2}-path{pid}")
-        plt.title("Pacing Rate Over Time")
-        plt.xlabel("Time (s)")
-        plt.ylabel("Pacing Rate (bytes/s)")
-        plt.legend()
+        pacing_plotted = False
+        # Check if df1 has pacing rate data
+        if 'pacing_rate' in df1.columns:
+            df1_pacing = df1.dropna(subset=['pacing_rate'])
+            if not df1_pacing.empty:
+                for pid in sorted(df1_pacing["path_id"].unique()):
+                    d = df1_pacing[df1_pacing["path_id"] == pid]
+                    plt.plot(d["time_s"], d["pacing_rate"], label=f"{label1}-path{pid}")
+                    pacing_plotted = True
+        
+        # Check if df2 has pacing rate data
+        if 'pacing_rate' in df2.columns:
+            df2_pacing = df2.dropna(subset=['pacing_rate'])
+            if not df2_pacing.empty:
+                for pid in sorted(df2_pacing["path_id"].unique()):
+                    d = df2_pacing[df2_pacing["path_id"] == pid]
+                    plt.plot(d["time_s"], d["pacing_rate"], label=f"{label2}-path{pid}")
+                    pacing_plotted = True
+        
+        if pacing_plotted:
+            plt.title("Pacing Rate Over Time")
+            plt.xlabel("Time (s)")
+            plt.ylabel("Pacing Rate (bytes/s)")
+            plt.legend()
+        else:
+            plt.close()  # Close the empty figure
+            print("Warning: No pacing rate data found; skipping pacing rate plot.")
 
     plt.show()
 
 
 if __name__ == "__main__":
-        # 1) Compute payload distribution stats
+    # 1) Compute payload distribution stats 
     if CALC_PAYLOAD_STATS:
         dfp1 = parse_payload_qlog(QLOG_FILE_1)
         dfp2 = parse_payload_qlog(QLOG_FILE_2)
