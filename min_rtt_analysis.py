@@ -159,7 +159,7 @@ def main():
     Main function to run the min_rtt analysis.
     """
     # Example usage
-    qlog_path = "/tmp/minitopo_experiences/server-75594b763df0ec97d899fcb327a93cac869c1187.sqlog"
+    qlog_path = "/tmp/minitopo_experiences/server-c564e66da11f8f699cacbff339d88fbe873d9aca.sqlog"
     
     try:
         print(f"Parsing qlog file: {qlog_path}")

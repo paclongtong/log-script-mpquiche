@@ -109,7 +109,7 @@ def parse_window_bumps(path):
             except json.JSONDecodeError:
                 continue
             name = event.get('name')
-            if name in ('transport:frame_sent', 'transport:packet_received'):
+            if name in ('transport:frame_sent', 'transport:packet_received', 'transport:packet_sent'):
                 t = event.get('time')
                 if t is None:
                     continue

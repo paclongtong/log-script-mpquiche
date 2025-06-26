@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 PLOT_HEADROOM = False                 # Plot headroom ratio (cwnd vs. bytes_in_flight)
 PLOT_LATEST_RTT = True               # Plot latest RTT (overall)
 PLOT_LATEST_RTT_PER_PATH = True     # Split latest RTT by path_id
-PLOT_RTT_VARIANCE = True            # Plot RTT variance
+PLOT_RTT_VARIANCE = False            # Plot RTT variance
 PLOT_BYTES_IN_FLIGHT_PER_PATH = True   
 PLOT_BYTES_IN_FLIGHT = True
 PLOT_CWND = True
@@ -15,9 +15,9 @@ CALC_PAYLOAD_STATS = False
 PLOT_PACING_RATE = True
 
 # Default files and labels
-QLOG_FILE_1 = "/tmp/minitopo_experiences/client-f8df99ac4cd66fe119beba9cab9c4acd3528d6b4.sqlog"
+QLOG_FILE_1 = "/tmp/minitopo_experiences/client-6195d17444700050b091f035b66c09cca3e8ba2b.sqlog"
 LABEL_1 = "client"
-QLOG_FILE_2 = "/tmp/minitopo_experiences/server-790c82828ec2619ce06462bdfc6ad8a288455601.sqlog"
+QLOG_FILE_2 = "/tmp/minitopo_experiences/server-25cb5c459201cbd2803c231011a95da7709ed1ff.sqlog"
 LABEL_2 = "server"
 
 user_defined_label = "original"
@@ -123,6 +123,172 @@ def plot_trends(qlog1, label1, qlog2, label2):
 
     print(f"Data range for {label1}: {df1['time_s'].min():.2f}s to {df1['time_s'].max():.2f}s ({len(df1)} records)")
     print(f"Data range for {label2}: {df2['time_s'].min():.2f}s to {df2['time_s'].max():.2f}s ({len(df2)} records)")
+
+    # Create a figure and a set of subplots
+    fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(18, 15)) # Adjust figsize as needed
+    axes = axes.flatten() # Flatten the 2D array of axes for easy iteration
+    plot_idx = 0
+
+    # 1) Headroom Ratio
+    if PLOT_HEADROOM and "headroom_ratio" in df1.columns and "headroom_ratio" in df2.columns:
+        ax = axes[plot_idx]
+        df1_valid = df1.dropna(subset=['headroom_ratio'])
+        df2_valid = df2.dropna(subset=['headroom_ratio'])
+        if not df1_valid.empty:
+            ax.plot(df1_valid["time_s"], df1_valid["headroom_ratio"], label=label1)
+        if not df2_valid.empty:
+            ax.plot(df2_valid["time_s"], df2_valid["headroom_ratio"], label=label2)
+        ax.set_title("Headroom Ratio Over Time")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Headroom Ratio")
+        ax.legend()
+        plot_idx += 1
+
+    # 2) Latest RTT
+    if PLOT_LATEST_RTT:
+        ax = axes[plot_idx]
+        if PLOT_LATEST_RTT_PER_PATH:
+            for pid in sorted(df1["path_id"].unique()):
+                d = df1[df1["path_id"] == pid]
+                ax.plot(d["time_s"], d["latest_rtt"], label=f"{label1}-path{pid}")
+            for pid in sorted(df2["path_id"].unique()):
+                d = df2[df2["path_id"] == pid]
+                ax.plot(d["time_s"], d["latest_rtt"], label=f"{label2}-path{pid}")
+        else:
+            ax.plot(df1["time_s"], df1["latest_rtt"], label=label1)
+            ax.plot(df2["time_s"], df2["latest_rtt"], label=label2)
+        ax.set_title("Latest RTT Over Time")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Latest RTT (ms)")
+        ax.legend()
+        plot_idx += 1
+
+    # 3) RTT Variance
+    if PLOT_RTT_VARIANCE:
+        ax = axes[plot_idx]
+        df1_rttvar = df1.dropna(subset=['rtt_variance'])
+        df2_rttvar = df2.dropna(subset=['rtt_variance'])
+        if not df1_rttvar.empty:
+            ax.plot(df1_rttvar["time_s"], df1_rttvar["rtt_variance"], label=label1)
+        if not df2_rttvar.empty:
+            ax.plot(df2_rttvar["time_s"], df2_rttvar["rtt_variance"], label=label2)
+        ax.set_title("RTT Variance Over Time")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("RTT Variance (ms^2)")
+        ax.legend()
+        plot_idx += 1
+
+    # 4) Bytes In Flight
+    if PLOT_BYTES_IN_FLIGHT:
+        ax = axes[plot_idx]
+        if PLOT_BYTES_IN_FLIGHT_PER_PATH:
+            for pid in sorted(df1["path_id"].unique()):
+                d = df1[df1["path_id"] == pid]
+                ax.plot(d["time_s"], d["bytes_in_flight"], label=f"{label1}-path{pid}")
+            for pid in sorted(df2["path_id"].unique()):
+                d = df2[df2["path_id"] == pid]
+                ax.plot(d["time_s"], d["bytes_in_flight"], label=f"{label2}-path{pid}")
+        else:
+            ax.plot(df1["time_s"], df1["bytes_in_flight"], label=label1)
+            ax.plot(df2["time_s"], df2["bytes_in_flight"], label=label2)
+        ax.set_title("Bytes In Flight Over Time")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Bytes In Flight")
+        ax.legend()
+        plot_idx += 1
+
+    # 5) Congestion Window
+    if PLOT_CWND:
+        ax = axes[plot_idx]
+        cwnd_plotted = False
+        for pid in sorted(df1["path_id"].unique()):
+            d = df1[df1["path_id"] == pid]
+            d_cwnd = d.dropna(subset=['cwnd'])
+            if not d_cwnd.empty:
+                ax.plot(d_cwnd["time_s"], d_cwnd["cwnd"], label=f"{label1}-path{pid}")
+                cwnd_plotted = True
+        for pid in sorted(df2["path_id"].unique()):
+            d = df2[df2["path_id"] == pid]
+            d_cwnd = d.dropna(subset=['cwnd'])
+            if not d_cwnd.empty:
+                ax.plot(d_cwnd["time_s"], d_cwnd["cwnd"], label=f"{label2}-path{pid}")
+                cwnd_plotted = True
+        
+        if cwnd_plotted:
+            ax.set_title("Congestion Window Over Time")
+            ax.set_xlabel("Time (s)")
+            ax.set_ylabel("Congestion Window (bytes)")
+            ax.legend()
+        else:
+            # Clear the current subplot if no data to plot
+            fig.delaxes(ax) 
+            print("Warning: No congestion window data found; skipping CWND plot in combined view.")
+        plot_idx += 1
+    
+    # 6) Payload Length
+    if PLOT_PAYLOAD_LENGTH:
+        ax = axes[plot_idx]
+        dfp1 = parse_payload_qlog(qlog1)
+        dfp2 = parse_payload_qlog(qlog2)
+        if not dfp1.empty or not dfp2.empty:
+            if not dfp1.empty:
+                ax.plot(dfp1["time_s"], dfp1["payload_length"], label=label1)
+            if not dfp2.empty:
+                ax.plot(dfp2["time_s"], dfp2["payload_length"], label=label2)
+            ax.set_title("Payload Length Over Time")
+            ax.set_xlabel("Time (s)")
+            ax.set_ylabel("Payload Length (bytes)")
+            ax.legend()
+        else:
+            fig.delaxes(ax)
+            print("Warning: No payload_length data found; skipping payload plot in combined view.")
+        plot_idx += 1
+
+    # 7) Pacing Rate
+    if PLOT_PACING_RATE:
+        ax = axes[plot_idx]
+        pacing_plotted = False
+        if 'pacing_rate' in df1.columns:
+            df1_pacing = df1.dropna(subset=['pacing_rate'])
+            if not df1_pacing.empty:
+                for pid in sorted(df1_pacing["path_id"].unique()):
+                    d = df1_pacing[df1_pacing["path_id"] == pid]
+                    ax.plot(d["time_s"], d["pacing_rate"], label=f"{label1}-path{pid}")
+                    pacing_plotted = True
+        
+        if 'pacing_rate' in df2.columns:
+            df2_pacing = df2.dropna(subset=['pacing_rate'])
+            if not df2_pacing.empty:
+                for pid in sorted(df2_pacing["path_id"].unique()):
+                    d = df2_pacing[df2_pacing["path_id"] == pid]
+                    ax.plot(d["time_s"], d["pacing_rate"], label=f"{label2}-path{pid}")
+                    pacing_plotted = True
+        
+        if pacing_plotted:
+            ax.set_title("Pacing Rate Over Time")
+            ax.set_xlabel("Time (s)")
+            ax.set_ylabel("Pacing Rate (bytes/s)")
+            ax.legend()
+        else:
+            fig.delaxes(ax)
+            print("Warning: No pacing rate data found; skipping pacing rate plot in combined view.")
+        plot_idx += 1
+
+    # Hide any unused subplots
+    for i in range(plot_idx, len(axes)):
+        fig.delaxes(axes[i])
+
+    # plt.tight_layout() # Adjust subplot parameters for a tight layout
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95]) 
+    plt.suptitle(f"Combined QLOG Metrics for {user_defined_label}", y=1.02, fontsize=16) # Add a super title
+    plt.show()
+
+# The existing individual plot calls should remain if you still want them
+# separate from the combined plot, or you can remove them if the combined
+# plot is sufficient.
+def plot_individual_trends(qlog1, label1, qlog2, label2):
+    df1 = parse_qlog(qlog1)
+    df2 = parse_qlog(qlog2)
 
     # 1) Headroom Ratio
     if PLOT_HEADROOM and "headroom_ratio" in df1.columns and "headroom_ratio" in df2.columns:
@@ -278,4 +444,8 @@ if __name__ == "__main__":
         compute_payload_stats(dfp1, LABEL_1)
         compute_payload_stats(dfp2, LABEL_2)
 
+    # Call the new combined plot function
     plot_trends(QLOG_FILE_1, LABEL_1, QLOG_FILE_2, LABEL_2)
+
+    # Call the original individual plot function (optional, if you still want individual plots)
+    # plot_individual_trends(QLOG_FILE_1, LABEL_1, QLOG_FILE_2, LABEL_2)
