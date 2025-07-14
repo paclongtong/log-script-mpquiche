@@ -1,0 +1,26 @@
+digraph QUIC_CUBIC_FSM {
+    rankdir=LR; // Arranges the graph from Left to Right
+    node [shape=ellipse, style=rounded];
+    
+    // Define States
+    SlowStart [label="Slow Start"];
+    ConservativeSlowStart [label="Conservative Slow Start"]
+    CongestionAvoidance [label="Congestion Avoidance"];
+    Recovery [label="Recovery"];
+
+
+    // Define Transitions
+  SlowStart -> ConservativeSlowStart [label="rtt increase"];
+  ConservativeSlowStart -> SlowStart [label="rtt decrease after 8 rounds"]
+    SlowStart -> CongestionAvoidance [label="cwnd >= ssthresh"];
+  
+  ConservativeSlowStart -> CongestionAvoidance [label="cwnd > ssthresh \nor rtt stays high"];
+    CongestionAvoidance -> Recovery [label="Packet Loss\n"];
+    SlowStart -> Recovery [label="Packet Loss"];
+    Recovery -> CongestionAvoidance [label="New ACK"];
+    CongestionAvoidance -> SlowStart [label="Timeout (RTO)"];
+    
+    // Add note from the diagram if needed, though often better handled in figure captions
+    // Note1 [shape=plaintext, label="RTT above a threshold or packet drop\nleads to timeout (RTO)"];
+    // Note1 -> SlowStart [style=dotted, arrowhead=none];
+}
