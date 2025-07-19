@@ -514,9 +514,6 @@ class QlogAnalyzer:
                     if not merged_df.empty and 'latest_rtt' in merged_df.columns:
                         merged_df.dropna(subset=['latest_rtt'], inplace=True)
                         rtt_values = merged_df['latest_rtt'].copy()
-                        # Apply same conversion logic as main RTT plot
-                        if not rtt_values.empty and rtt_values.max() > 1000:
-                            rtt_values = rtt_values / 1000
                         y_values = rtt_values
 
                         marker = 'x' if path_id == 0 else '+'
@@ -548,9 +545,7 @@ class QlogAnalyzer:
                             state_df = merged_df[merged_df['new_state'] == state]
                             if not state_df.empty:
                                 rtt_values = state_df['latest_rtt'].copy()
-                                # Apply same conversion logic as main RTT plot
-                                if not rtt_values.empty and rtt_values.max() > 1000:
-                                    rtt_values = rtt_values / 1000
+
                                 y_values = rtt_values
 
                                 marker = self.cubic_state_markers.get(state, 'o')
@@ -579,7 +574,7 @@ class QlogAnalyzer:
 
     def plot_congestion_window(self, all_metrics: List[Dict], all_losses: List[Dict], 
                                 all_cubic_states: List[Dict], configs: List[QlogConfig], 
-                                output_prefix: str = None):
+                                output_suffix: str = None):
         """Plot congestion window comparison with packet loss markers and CUBIC states."""
         fig, ax = plt.subplots(figsize=(14, 8))
         
@@ -624,15 +619,15 @@ class QlogAnalyzer:
         
         plt.tight_layout()
         
-        if output_prefix:
-            plt.savefig(f'{output_prefix}_cwnd_comparison.png', dpi=300, bbox_inches='tight')
-            print(f"CWND plot saved to {output_prefix}_cwnd_comparison.png")
+        if output_suffix:
+            plt.savefig(f'cwnd_comparison_{output_suffix}.png', dpi=300, bbox_inches='tight')
+            print(f"CWND plot saved to cwnd_comparison_{output_suffix}.png")
         else:
-            plt.show()
+            pass # instead of plt.show() blocking
 
     def plot_bytes_in_flight(self, all_metrics: List[Dict], all_losses: List[Dict],
                            all_cubic_states: List[Dict], configs: List[QlogConfig], 
-                           output_prefix: str = None):
+                           output_suffix: str = None):
         """Plot bytes in flight comparison with packet loss markers and CUBIC states"""
         fig, ax = plt.subplots(figsize=(14, 8))
         
@@ -653,10 +648,10 @@ class QlogAnalyzer:
         y_lim_set = ax.get_ylim()[1] > 0
         
         if PACKET_LOSS and y_lim_set:
-            self.add_packet_loss_markers(ax, all_losses, configs)
+            self.add_packet_loss_markers_bif(ax, all_losses, all_metrics, configs)
         
         if CUBIC_STATES and y_lim_set:
-            self.add_cubic_state_markers(ax, all_cubic_states, configs)
+            self.add_cubic_state_markers_bif(ax, all_cubic_states, all_metrics, configs)
         
         time_min, time_max = self.get_common_time_range([all_metrics, all_losses, all_cubic_states])
         ax.set_xlim(time_min, time_max)
@@ -669,16 +664,16 @@ class QlogAnalyzer:
         
         plt.tight_layout()
         
-        if output_prefix:
-            plt.savefig(f'{output_prefix}_bytes_in_flight.png', dpi=300, bbox_inches='tight')
-            print(f"Bytes in flight plot saved to {output_prefix}_bytes_in_flight.png")
+        if output_suffix:
+            plt.savefig(f'bytes_in_flight_{output_suffix}.png', dpi=300, bbox_inches='tight')
+            print(f"Bytes in flight plot saved to bytes_in_flight_{output_suffix}.png")
         else:
-            plt.show()
+            pass # instead of plt.show() blocking
 
     def plot_rtt_comparison(self, all_metrics: List[Dict], all_losses: List[Dict],
                           all_cubic_states: List[Dict], 
                           configs: List[QlogConfig], 
-                          output_prefix: str = None):
+                          output_suffix: str = None):
         """Plot RTT comparison with packet loss markers and CUBIC states"""
         fig, ax = plt.subplots(figsize=(14, 8))
         
@@ -720,16 +715,16 @@ class QlogAnalyzer:
         
         plt.tight_layout()
         
-        if output_prefix:
-            plt.savefig(f'{output_prefix}_rtt_comparison.png', dpi=300, bbox_inches='tight')
-            print(f"RTT plot saved to {output_prefix}_rtt_comparison.png")
+        if output_suffix:
+            plt.savefig(f'rtt_comparison_{output_suffix}.png', dpi=300, bbox_inches='tight')
+            print(f"RTT plot saved to rtt_comparison_{output_suffix}.png")
         else:
-            plt.show()
+            pass # instead of plt.show() blocking
 
     def plot_rtt_raw_updates(self, all_metrics: List[Dict], all_losses: List[Dict],
                             all_cubic_states: List[Dict], 
                             configs: List[QlogConfig], 
-                            output_prefix: str = None):
+                            output_suffix: str = None):
         """Plot RTT without forward filling to show actual RTT update occurrences"""
         fig, ax = plt.subplots(figsize=(14, 8))
         
@@ -796,9 +791,10 @@ class QlogAnalyzer:
         
         plt.tight_layout()
         
-        if output_prefix:
-            plt.savefig(f'{output_prefix}_rtt_raw_updates.png', dpi=300, bbox_inches='tight')
-            print(f"RTT raw updates plot saved to {output_prefix}_rtt_raw_updates.png")
+        if output_suffix:
+            plt.savefig(f'rtt_raw_updates_{output_suffix}.png', dpi=300, bbox_inches='tight')
+            print(f"RTT raw updates plot saved to rtt_raw_updates_{output_suffix}.png")
+            plt.show()
         else:
             plt.show()
 
@@ -863,9 +859,70 @@ class QlogAnalyzer:
                                              edgecolors='black', linewidth=1, zorder=6,
                                              label=f'{config.label} Path{path_id} {state} (Raw)')
 
+    def add_packet_loss_markers_bif(self, ax, loss_data_by_path, metrics_data_by_path, configs):
+        """Places packet loss markers on the bytes in flight plot by looking up the correct BIF value."""
+        for i, config in enumerate(configs):
+            if i >= len(loss_data_by_path) or i >= len(metrics_data_by_path): continue
+            
+            color = config.color or self.default_colors[i % len(self.default_colors)]
+            
+            for path_id in self.paths_to_plot:
+                loss_df = loss_data_by_path[i].get(path_id, pd.DataFrame())
+                metrics_df = metrics_data_by_path[i].get(path_id, pd.DataFrame())
+
+                if not loss_df.empty and not metrics_df.empty and 'bytes_in_flight' in metrics_df.columns:
+                    # Ensure metrics have continuous bytes_in_flight values through forward fill
+                    metrics_filled = metrics_df.copy()
+                    metrics_filled = metrics_filled.sort_values('time_ms')
+                    metrics_filled['bytes_in_flight'] = metrics_filled['bytes_in_flight'].ffill()
+                    
+                    metric_subset = metrics_filled[['time_ms', 'bytes_in_flight']].dropna().sort_values('time_ms')
+                    merged_df = pd.merge_asof(loss_df.sort_values('time_ms'), metric_subset, on='time_ms', direction='backward')
+
+                    if not merged_df.empty and 'bytes_in_flight' in merged_df.columns:
+                        merged_df.dropna(subset=['bytes_in_flight'], inplace=True)
+                        y_values = merged_df['bytes_in_flight']
+
+                        marker = 'x' if path_id == 0 else '+'
+                        ax.scatter(merged_df['time_ms'], y_values,
+                                     marker=marker, s=100, color=color, alpha=0.9,
+                                     linewidth=2, zorder=5, label=f'{config.label} Path{path_id} Loss')
+
+    def add_cubic_state_markers_bif(self, ax, cubic_data_by_path, metrics_data_by_path, configs):
+        """Places CUBIC state markers on the bytes in flight plot by looking up the correct BIF value."""
+        for i, config in enumerate(configs):
+            if i >= len(cubic_data_by_path) or i >= len(metrics_data_by_path): continue
+
+            for path_id in self.paths_to_plot:
+                cubic_df = cubic_data_by_path[i].get(path_id, pd.DataFrame())
+                metrics_df = metrics_data_by_path[i].get(path_id, pd.DataFrame())
+
+                if not cubic_df.empty and not metrics_df.empty and 'bytes_in_flight' in metrics_df.columns:
+                    # Ensure metrics have continuous bytes_in_flight values through forward fill
+                    metrics_filled = metrics_df.copy()
+                    metrics_filled = metrics_filled.sort_values('time_ms')
+                    metrics_filled['bytes_in_flight'] = metrics_filled['bytes_in_flight'].ffill()
+                    
+                    metric_subset = metrics_filled[['time_ms', 'bytes_in_flight']].dropna().sort_values('time_ms')
+                    merged_df = pd.merge_asof(cubic_df.sort_values('time_ms'), metric_subset, on='time_ms', direction='backward')
+
+                    if not merged_df.empty and 'bytes_in_flight' in merged_df.columns:
+                        merged_df.dropna(subset=['bytes_in_flight'], inplace=True)
+                        for state in merged_df['new_state'].unique():
+                            state_df = merged_df[merged_df['new_state'] == state]
+                            if not state_df.empty:
+                                y_values = state_df['bytes_in_flight']
+
+                                marker = self.cubic_state_markers.get(state, 'o')
+                                color = self.cubic_state_colors.get(state, 'black')
+                                ax.scatter(state_df['time_ms'], y_values,
+                                             marker=marker, s=80, color=color, alpha=0.9,
+                                             edgecolors='black', linewidth=1, zorder=5,
+                                             label=f'{config.label} Path{path_id} {state}')
+
     def plot_send_rate(self, all_packets: List[Dict], all_losses: List[Dict],
                       all_cubic_states: List[Dict], configs: List[QlogConfig], 
-                      output_prefix: str = None, window_ms: int = 100):
+                      output_suffix: str = None, window_ms: int = 100):
         """Plot send rate comparison with packet loss markers and CUBIC states"""
         fig, ax = plt.subplots(figsize=(14, 8))
         
@@ -917,9 +974,9 @@ class QlogAnalyzer:
         
         plt.tight_layout()
         
-        if output_prefix:
-            plt.savefig(f'{output_prefix}_send_rate.png', dpi=300, bbox_inches='tight')
-            print(f"Send rate plot saved to {output_prefix}_send_rate.png")
+        if output_suffix:
+            plt.savefig(f'send_rate_{output_suffix}.png', dpi=300, bbox_inches='tight')
+            print(f"Send rate plot saved to send_rate_{output_suffix}.png")
         else:
             plt.show()
 
@@ -945,7 +1002,7 @@ class QlogAnalyzer:
                 print(f"{config.label}: No packet losses detected")
         print()
 
-    def analyze(self, configs: List[QlogConfig], output_prefix: str = None):
+    def analyze(self, configs: List[QlogConfig], output_suffix: str = None):
         """Main analysis function"""
         print(f"Starting analysis of {len(configs)} qlog files...")
         print(f"Analyzing paths: {self.paths_to_plot}")
@@ -1005,11 +1062,11 @@ class QlogAnalyzer:
 
         # Generate all plots
         print("\nGenerating plots...")
-        self.plot_congestion_window(all_metrics, all_losses, all_cubic_states, configs, output_prefix)
-        self.plot_bytes_in_flight(all_metrics, all_losses, all_cubic_states, configs, output_prefix)
-        self.plot_rtt_comparison(all_metrics, all_losses, all_cubic_states, configs, output_prefix)
-        self.plot_rtt_raw_updates(all_metrics, all_losses, all_cubic_states, configs, output_prefix)
-        # self.plot_send_rate(all_packets, all_losses, all_cubic_states, configs, output_prefix)
+        self.plot_congestion_window(all_metrics, all_losses, all_cubic_states, configs, output_suffix)
+        self.plot_bytes_in_flight(all_metrics, all_losses, all_cubic_states, configs, output_suffix)
+        self.plot_rtt_comparison(all_metrics, all_losses, all_cubic_states, configs, output_suffix)
+        self.plot_rtt_raw_updates(all_metrics, all_losses, all_cubic_states, configs, output_suffix)
+        # self.plot_send_rate(all_packets, all_losses, all_cubic_states, configs, output_suffix)
         
         print("\nAnalysis complete.")
         plt.close('all') # Close all figures to free memory
@@ -1060,8 +1117,8 @@ Examples:
                         help='Path IDs to analyze (default: 0 1)')
     parser.add_argument('--condition', default='No Loss',
                         help='Condition description for plot titles')
-    parser.add_argument('--output-prefix', 
-                        help='Prefix for output files (will create multiple plots)')
+    parser.add_argument('--output-suffix', 
+                        help='Suffix for output files (will create multiple plots)')
     
     args = parser.parse_args()
     
@@ -1076,7 +1133,7 @@ Examples:
         
         # Create analyzer and run analysis
         analyzer = QlogAnalyzer(condition=args.condition, paths_to_plot=valid_paths)
-        analyzer.analyze(configs, args.output_prefix)
+        analyzer.analyze(configs, args.output_suffix)
         
     except Exception as e:
         print(f"Error: {e}")
